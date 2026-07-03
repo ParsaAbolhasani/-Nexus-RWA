@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+interface IIdentityRegistry {
+    function isVerified(address account) external view returns (bool);
+    function registerIdentity(address account, bytes32 identityHash) external;
+    function revokeIdentity(address account) external;
+}
+
+contract RWAToken is ERC20, AccessControl, Pausable, ReentrancyGuard {
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
+
+    IIdentityRegistry public identityRegistry;
+
+    struct AssetInfo {
+        string name;
+        string symbol;
+        uint256 totalSupply;
+        uint256 assetValue;
+        string assetType;
+        string jurisdiction;
+        bool isActive;
+    }
+
+    AssetInfo public assetInfo;
+    mapping(address => bool) public isBlacklisted;
+    uint256 public maxHolderLimit;
+
+    event TokenMinted(address indexed to, uint256 amount);
+    event TokenBurned(address indexed from, uint256 amount);
+    event ComplianceUpdated(address indexed user, bool status);
+    event AssetValueUpdated(uint256 newValue, uint256 timestamp);
+
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        address _identityRegistry,
+        AssetInfo memory _assetInfo
+    ) ERC20(_name, _symbol) {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(MINTER_ROLE, msg.sender);
+        _grantRole(COMPLIANCE_ROLE, msg.sender);
+
+        identityRegistry = IIdentityRegistry(_identityRegistry);
+        assetInfo = _assetInfo;
+        maxHolderLimit = type(uint256).max;
+    }
+
+    function mint(address to, uint256 amount)
+        external
+        onlyRole(MINTER_ROLE)
+        nonReentrant
+        whenNotPaused
+    {
+        require(identityRegistry.isVerified(to), "RWA: recipient not KYC verified");
+        require(!isBlacklisted[to], "RWA: recipient blacklisted");
+        require(totalSupply() + amount <= assetInfo.totalSupply, "RWA: exceeds total supply");
+        _mint(to, amount);
+        emit TokenMinted(to, amount);
+    }
+
+    function transfer(address to, uint256 amount)
+        public
+        virtual
+        override
+        whenNotPaused
+        returns (bool)
+    {
+        require(!isBlacklisted[msg.sender], "RWA: sender blacklisted");
+        require(!isBlacklisted[to], "RWA: recipient blacklisted");
+        require(identityRegistry.isVerified(to), "RWA: recipient not KYC verified");
+        require(balanceOf(to) + amount <= maxHolderLimit, "RWA: exceeds holder limit");
+        return super.transfer(to, amount);
+    }
+
+    function updateAssetValue(uint256 newValue)
+        external
+        onlyRole(COMPLIANCE_ROLE)
+    {
+        assetInfo.assetValue = newValue;
+        emit AssetValueUpdated(newValue, block.timestamp);
+    }
+
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
+}

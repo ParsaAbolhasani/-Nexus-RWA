@@ -1,0 +1,130 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract RWAVault is AccessControl, ReentrancyGuard {
+    using SafeMath for uint256;
+
+    bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
+
+    IERC20 public rwaToken;
+    IERC20 public stablecoin;
+
+    struct VaultInfo {
+        uint256 totalAssets;
+        uint256 totalShares;
+        uint256 yieldRate;
+        uint256 lastUpdateTime;
+        uint256 accumulatedYield;
+    }
+
+    VaultInfo public vaultInfo;
+    mapping(address => uint256) public userYield;
+    mapping(address => uint256) public lastClaimTime;
+
+    event Deposited(address indexed user, uint256 amount, uint256 shares);
+    event Withdrawn(address indexed user, uint256 amount, uint256 shares);
+    event YieldDistributed(uint256 totalYield, uint256 timestamp);
+    event YieldClaimed(address indexed user, uint256 amount);
+
+    constructor(
+        address _rwaToken,
+        address _stablecoin,
+        uint256 _initialYieldRate
+    ) {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(MANAGER_ROLE, msg.sender);
+
+        rwaToken = IERC20(_rwaToken);
+        stablecoin = IERC20(_stablecoin);
+        vaultInfo.yieldRate = _initialYieldRate;
+        vaultInfo.lastUpdateTime = block.timestamp;
+    }
+
+    function deposit(uint256 amount) external nonReentrant {
+        require(amount > 0, "Vault: amount must be > 0");
+        require(stablecoin.transferFrom(msg.sender, address(this), amount), "Vault: transfer failed");
+
+        uint256 pricePerShare = _getPricePerShare();
+        uint256 shares = amount * 1e18 / pricePerShare;
+
+        vaultInfo.totalAssets += amount;
+        vaultInfo.totalShares += shares;
+
+        // Mint RWA tokens for user (requires MINTER_ROLE on token contract)
+        // For simplicity, we assume token contract has mint function with appropriate role
+        // IRWAToken(address(rwaToken)).mint(msg.sender, shares);
+
+        emit Deposited(msg.sender, amount, shares);
+    }
+
+    function withdraw(uint256 shares) external nonReentrant {
+        require(shares > 0, "Vault: shares must be > 0");
+        require(shares <= rwaToken.balanceOf(msg.sender), "Vault: insufficient shares");
+
+        uint256 pricePerShare = _getPricePerShare();
+        uint256 amount = shares * pricePerShare / 1e18;
+
+        vaultInfo.totalAssets -= amount;
+        vaultInfo.totalShares -= shares;
+
+        // Burn RWA tokens
+        // IRWAToken(address(rwaToken)).burnFrom(msg.sender, shares);
+
+        require(stablecoin.transfer(msg.sender, amount), "Vault: transfer failed");
+
+        emit Withdrawn(msg.sender, amount, shares);
+    }
+
+    function distributeYield() external onlyRole(MANAGER_ROLE) nonReentrant {
+        uint256 yieldAmount = _calculateYield();
+        require(yieldAmount > 0, "Vault: no yield to distribute");
+
+        vaultInfo.accumulatedYield += yieldAmount;
+        vaultInfo.lastUpdateTime = block.timestamp;
+
+        emit YieldDistributed(yieldAmount, block.timestamp);
+    }
+
+    function claimYield() external nonReentrant {
+        uint256 userShare = _calculateUserYield(msg.sender);
+        require(userShare > 0, "Vault: no yield to claim");
+
+        userYield[msg.sender] = 0;
+        lastClaimTime[msg.sender] = block.timestamp;
+
+        require(stablecoin.transfer(msg.sender, userShare), "Vault: transfer failed");
+
+        emit YieldClaimed(msg.sender, userShare);
+    }
+
+    function _getPricePerShare() internal view returns (uint256) {
+        if (vaultInfo.totalShares == 0) {
+            return 1e18;
+        }
+        return vaultInfo.totalAssets * 1e18 / vaultInfo.totalShares;
+    }
+
+    function _calculateYield() internal view returns (uint256) {
+        uint256 timePassed = block.timestamp - vaultInfo.lastUpdateTime;
+        uint256 annualYield = vaultInfo.totalAssets * vaultInfo.yieldRate / 10000;
+        return annualYield * timePassed / 365 days;
+    }
+
+    function _calculateUserYield(address user) internal view returns (uint256) {
+        uint256 userShares = rwaToken.balanceOf(user);
+        if (userShares == 0) return 0;
+
+        uint256 totalYield = vaultInfo.accumulatedYield;
+        uint256 userYieldShare = totalYield * userShares / vaultInfo.totalShares;
+
+        return userYieldShare - userYield[user];
+    }
+
+    function updateYieldRate(uint256 newRate) external onlyRole(MANAGER_ROLE) {
+        vaultInfo.yieldRate = newRate;
+    }
+}
