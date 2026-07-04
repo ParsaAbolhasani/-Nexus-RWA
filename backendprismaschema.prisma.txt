@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Token {
+  id          String   @id @default(cuid())
+  address     String   @unique
+  name        String
+  symbol      String
+  assetType   String
+  totalSupply Float
+  jurisdiction String
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assetInfo   AssetInfo?
+}
+
+model AssetInfo {
+  id          String   @id @default(cuid())
+  tokenId     String   @unique
+  token       Token    @relation(fields: [tokenId], references: [id])
+  value       Float
+  yieldRate   Float
+  lastUpdated DateTime @default(now())
+}
+
+model User {
+  id          String   @id @default(cuid())
+  address     String   @unique
+  isVerified  Boolean  @default(false)
+  identityHash String?
+  createdAt   DateTime @default(now())
+  transactions Transaction[]
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  tokenId     String
+  type        String   // buy, sell, mint, burn
+  amount      Float
+  hash        String?
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+}

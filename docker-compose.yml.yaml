@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: rwa_postgres
+    environment:
+      POSTGRES_USER: rwa_user
+      POSTGRES_PASSWORD: rwa_password
+      POSTGRES_DB: rwa_nexus
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - rwa_network
+
+  backend:
+    build: ./backend
+    container_name: rwa_backend
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://rwa_user:rwa_password@postgres:5432/rwa_nexus
+    depends_on:
+      - postgres
+    networks:
+      - rwa_network
+
+  frontend:
+    build: ./frontend
+    container_name: rwa_frontend
+    ports:
+      - "3000:3000"
+    networks:
+      - rwa_network
+
+volumes:
+  postgres_data:
+
+networks:
+  rwa_network:
